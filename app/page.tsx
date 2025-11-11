@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 
@@ -9,6 +9,8 @@ export default function HomePage() {
   const pinWrapperRef = useRef<HTMLDivElement | null>(null);
   const titleRef = useRef<HTMLHeadingElement | null>(null);
   const cubeRef = useRef<HTMLDivElement | null>(null);
+  const turbulenceRef = useRef<SVGFETurbulenceElement | null>(null);
+  const displacementRef = useRef<SVGFEDisplacementMapElement | null>(null);
 
   useLayoutEffect(() => {
     if (typeof window === "undefined") {
@@ -28,7 +30,20 @@ export default function HomePage() {
       }
 
       gsap.set(titleRef.current, { transformOrigin: "center center" });
-      gsap.set(cubeRef.current, { transformOrigin: "center center" });
+      gsap.set(cubeRef.current, { transformOrigin: "center center", willChange: "transform" });
+
+      const faces = gsap.utils.toArray<HTMLElement>(".cube-face");
+      faces.forEach((face) => {
+        face.style.willChange = "transform, opacity";
+      });
+
+      const vectors = faces.map(() => ({
+        x: gsap.utils.random(-160, 160),
+        y: gsap.utils.random(-160, 160),
+        z: gsap.utils.random(-220, 220),
+        rotationX: gsap.utils.random(-40, 40),
+        rotationY: gsap.utils.random(-40, 40),
+      }));
 
       const cubeTimeline = gsap.timeline({
         scrollTrigger: {
@@ -46,28 +61,156 @@ export default function HomePage() {
         .fromTo(
           titleRef.current,
           { scale: 0.5, opacity: 0 },
-          { scale: 1.5, opacity: 1, ease: "power2.out" },
+          { scale: 1.45, opacity: 1, ease: "power3.out" },
           0,
         )
         .to(
           cubeRef.current,
-          { rotateY: -90 },
+          { rotateY: -90, duration: 1 },
           0,
         )
         .to(
           cubeRef.current,
-          { rotateY: -180 },
-          1,
+          { rotateY: -180, duration: 1 },
+          ">",
+        )
+        .addLabel("explode")
+        .to(
+          faces,
+          {
+            duration: 0.65,
+            opacity: 0,
+            x: (_, i) => vectors[i].x,
+            y: (_, i) => vectors[i].y,
+            z: (_, i) => vectors[i].z,
+            rotationX: (_, i) => vectors[i].rotationX,
+            rotationY: (_, i) => vectors[i].rotationY,
+            stagger: { each: 0.05, from: "random" },
+            ease: "power3.out",
+          },
+          "explode",
+        )
+        .addLabel("reassemble", "explode+=0.7")
+        .to(
+          faces,
+          {
+            duration: 0.65,
+            opacity: 1,
+            x: 0,
+            y: 0,
+            z: 0,
+            rotationX: 0,
+            rotationY: 0,
+            stagger: { each: 0.04, from: "center" },
+            ease: "power3.inOut",
+          },
+          "reassemble",
         )
         .to(
           cubeRef.current,
-          { rotateX: -90, rotateY: -180 },
-          2,
+          { rotateX: -90, rotateY: -180, duration: 1, ease: "power2.inOut" },
+          "reassemble+=0.7",
         );
     }, sectionRef);
 
     return () => {
       ctx.revert();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    turbulenceRef.current = document.getElementById(
+      "glitch-noise-turbulence",
+    ) as SVGFETurbulenceElement | null;
+    displacementRef.current = document.getElementById(
+      "glitch-noise-displace",
+    ) as SVGFEDisplacementMapElement | null;
+
+    const faces = Array.from(document.querySelectorAll<HTMLElement>(".cube-face"));
+    const turbulence = turbulenceRef.current;
+    const displacement = displacementRef.current;
+
+    if (!turbulence || !displacement || faces.length === 0) {
+      return;
+    }
+
+    let hoverFace: HTMLElement | null = null;
+    let pointer = { x: 0, y: 0 };
+    let rafId: number | null = null;
+
+    const resetFilter = () => {
+      turbulence.setAttribute("baseFrequency", "0.35 0.6");
+      displacement.setAttribute("scale", "0");
+    };
+
+    const updateFilter = () => {
+      if (!hoverFace) {
+        rafId = null;
+        return;
+      }
+
+      const rect = hoverFace.getBoundingClientRect();
+      const relX = (pointer.x - rect.left) / rect.width;
+      const relY = (pointer.y - rect.top) / rect.height;
+
+      const freqX = (0.35 + relX * 0.35).toFixed(3);
+      const freqY = (0.6 + relY * 0.4).toFixed(3);
+      const scale = Math.max(10, Math.min(55, 20 + relX * 30 + relY * 30)).toFixed(2);
+
+      turbulence.setAttribute("baseFrequency", `${freqX} ${freqY}`);
+      displacement.setAttribute("scale", scale);
+
+      rafId = window.requestAnimationFrame(updateFilter);
+    };
+
+    const handlePointerEnter = (event: PointerEvent) => {
+      const target = event.currentTarget as HTMLElement;
+      hoverFace = target;
+      pointer = { x: event.clientX, y: event.clientY };
+      target.style.filter = "url(#glitchNoise)";
+      if (rafId === null) {
+        rafId = window.requestAnimationFrame(updateFilter);
+      }
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      pointer = { x: event.clientX, y: event.clientY };
+    };
+
+    const handlePointerLeave = (event: PointerEvent) => {
+      const target = event.currentTarget as HTMLElement;
+      target.style.filter = "none";
+      hoverFace = null;
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      resetFilter();
+    };
+
+    faces.forEach((face) => {
+      face.addEventListener("pointerenter", handlePointerEnter);
+      face.addEventListener("pointermove", handlePointerMove);
+      face.addEventListener("pointerleave", handlePointerLeave);
+    });
+
+    return () => {
+      faces.forEach((face) => {
+        face.removeEventListener("pointerenter", handlePointerEnter);
+        face.removeEventListener("pointermove", handlePointerMove);
+        face.removeEventListener("pointerleave", handlePointerLeave);
+        face.style.filter = "none";
+      });
+
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+      }
+
+      resetFilter();
     };
   }, []);
 
@@ -149,8 +292,13 @@ type CubeFaceProps = {
 function CubeFace({ label, bgClass, transform }: CubeFaceProps) {
   return (
     <div
-      className={`absolute flex h-full w-full items-center justify-center rounded-3xl text-center text-xl font-semibold text-white shadow-2xl ${bgClass}`}
-      style={{ transform }}
+      className={`cube-face absolute flex h-full w-full items-center justify-center rounded-3xl text-center text-xl font-semibold text-white shadow-2xl transition-[filter] duration-200 ${bgClass}`}
+      style={{
+        transform,
+        backfaceVisibility: "hidden",
+        willChange: "transform, opacity",
+      }}
+      data-face={label}
     >
       {label}
     </div>
